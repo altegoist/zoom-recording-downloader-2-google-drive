@@ -5,7 +5,7 @@
 **Zoom Recording Downloader 2 Google Drive** is Google Collab Python script that uses Zoom's API (v2) to download and organize all cloud recordings from a Zoom account onto Google Drive storage.
 
 ## Screenshot ##
-![screenshot](screenshot.png)
+![screenshot](screenshot1.png)
 
 ## Installation ##
 
