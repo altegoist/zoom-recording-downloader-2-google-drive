@@ -2,7 +2,7 @@
 
 [![Python 3.6](https://img.shields.io/badge/python-3.6%20%2B-blue.svg)](https://www.python.org/) [![License](https://img.shields.io/badge/license-MIT-brown.svg)](https://raw.githubusercontent.com/ricardorodrigues-ca/zoom-recording-downloader/master/LICENSE)
 
-**Zoom Recording Downloader** is a cross-platform Python script that uses Zoom's API (v2) to download and organize all cloud recordings from a Zoom account onto local storage.
+**Zoom Recording Downloader 2 Google Drive** is Google Collab Python script that uses Zoom's API (v2) to download and organize all cloud recordings from a Zoom account onto Google Drive storage.
 
 ## Screenshot ##
 ![screenshot](screenshot.png)
@@ -25,7 +25,7 @@ _Attention: You will need a [Zoom Developer account](https://marketplace.zoom.us
 
 2. Add the necessary scopes to your app. In your app's _Scopes_ tab, add the following scopes: `account:master`, `account:read:admin`, `account:write:admin`, `information_barriers:read:admin`, `information_barriers:read:master`, `information_barriers:write:admin`, `information_barriers:write:master`, `meeting:master`, `meeting:read:admin`, `meeting:read:admin:sip_dialing`, `meeting:write:admin`, `meeting_token:read:admin:live_streaming`, `meeting_token:read:admin:local_archiving`, `meeting_token:read:admin:local_recording`, `recording:master`, `recording:read:admin`, `recording:write:admin`, `user:master`, `user:read:admin`, `user:write:admin`.
 
-3. Copy **zoom-recording-downloader.conf.template** to a new file named **zoom-recording-downloader.conf** and fill in your Server-to-Server OAuth app credentials:
+3. You need to create "drive/MyDrive/Zoom Recordings" folder in Google Drive (you may change this in the code). Copy **zoom-recording-downloader.conf.template** to a new file named **zoom-recording-downloader.conf** in this folder and fill in your Server-to-Server OAuth app credentials:
 ```
       {
 	      "OAuth": {
@@ -35,17 +35,18 @@ _Attention: You will need a [Zoom Developer account](https://marketplace.zoom.us
 	      }
       }
 ```
+Put the file in Google Drive folder as it is set up in code **COMPLETED_MEETING_IDS_LOG = "drive/MyDrive/Zoom Recordings/completed-downloads.log"** or specify your own path.
 
 4. You can optionally add other options to the configuration file:
 
-- Specify the base **download_dir** under which the recordings will be downloaded (default is 'downloads')
-- Specify the **completed_log** log file that will store the ID's of downloaded recordings (default is 'completed-downloads.log')
+- Specify the base **download_dir** under which the recordings will be downloaded (default is 'drive/MyDrive/Zoom Recordings')
+- Specify the **completed_log** log file that will store the ID's of downloaded recordings (default is 'drive/MyDrive/Zoom Recordings/completed-downloads.log')
 
 ```
       {
               "Storage": {
-                      "download_dir": "downloads",
-                      "completed_log": "completed-downloads.log"
+                      "download_dir": "drive/MyDrive/Zoom Recordings",
+                      "completed_log": "drive/MyDrive/Zoom Recordings/completed-downloads.log"
               }
       }
 ```
