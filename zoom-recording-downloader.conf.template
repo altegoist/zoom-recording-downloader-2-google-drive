@@ -6,8 +6,8 @@
 	},
 	"_comment": "everything after this is optional",
 	"Storage": {
-		"completed_log": "completed-downloads.log",
-		"download_dir": "downloads"
+		"download_dir": "drive/MyDrive/Zoom Recordings",
+		"completed_log": "drive/MyDrive/Zoom Recordings/completed-downloads.log"
 	},
 	"Recordings": {
 		"start_year": "2023",
