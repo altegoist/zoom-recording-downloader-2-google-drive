@@ -8,9 +8,9 @@
 # Created:      2020-04-26
 # Author:       Ricardo Rodrigues
 # Fork by:      Valentin Vasilevskiy
-# Updated:      2025-01-18
-# Website:      https://github.com/ricardorodrigues-ca/zoom-recording-downloader-2-google-drive
-# Forked from:  https://github.com/ricardorodrigues-ca/zoom-recording-downloader
+# Updated:      2025-01-27
+# Website:      https://github.com/ricardorodrigues-ca/zoom-recording-downloader
+# Forked from:  https://gist.github.com/danaspiegel/c33004e52ffacb60c24215abf8301680
 
 # system libraries
 import base64
@@ -63,17 +63,19 @@ ACCOUNT_ID = config("OAuth", "account_id", LookupError)
 CLIENT_ID = config("OAuth", "client_id", LookupError)
 CLIENT_SECRET = config("OAuth", "client_secret", LookupError)
 
-APP_VERSION = "3.2 (OAuth)"
+APP_VERSION = "3.21 (OAuth)"
 
 API_ENDPOINT_USER_LIST = "https://api.zoom.us/v2/users"
+
+DELETE_ZOOM_RECORDINGS_AFTER_DOWNLOAD = True
 
 RECORDING_START_YEAR = config("Recordings", "start_year", datetime.date.today().year)
 RECORDING_START_MONTH = config("Recordings", "start_month", 1)
 RECORDING_START_DAY = config("Recordings", "start_day", 1)
 RECORDING_START_DATE = parser.parse(config("Recordings", "start_date", f"{RECORDING_START_YEAR}-{RECORDING_START_MONTH}-{RECORDING_START_DAY}"))
 RECORDING_END_DATE = parser.parse(config("Recordings", "end_date", str(datetime.date.today())))
-DOWNLOAD_DIRECTORY = "drive/MyDrive/Zoom Recordings/2025"
-COMPLETED_MEETING_IDS_LOG = "drive/MyDrive/Zoom Recordings/completed-downloads.log"
+DOWNLOAD_DIRECTORY = config("Storage", "download_dir", 'drive/MyDrive/Zoom Recordings')
+COMPLETED_MEETING_IDS_LOG = config("Storage", "completed_log", 'drive/MyDrive/Zoom Recordings/completed-downloads.log')
 COMPLETED_MEETING_IDS = set()
 
 MEETING_TIMEZONE = ZoneInfo(config("Recordings", "timezone", 'UTC'))
@@ -122,7 +124,6 @@ def get_users():
             f"{Color.RED}### Could not retrieve users. Please make sure that your access "
             f"token is still valid{Color.END}"
         )
-
         system.exit(1)
 
     page_data = response.json()
@@ -167,14 +168,12 @@ def format_filename(params):
 
     filename = MEETING_FILENAME.format(**locals())
     folder = MEETING_FOLDER.format(**locals())
-    return (filename, folder)
+    return (filename, folder, year)
 
 
 def get_downloads(recording):
     if not recording.get("recording_files"):
         raise Exception
-
-    #print(f"==> All recording files: {json.dumps(recording.get('recording_files', []), indent=4)}")
 
     downloads = []
     for download in recording["recording_files"]:
@@ -189,7 +188,6 @@ def get_downloads(recording):
         else:
             recording_type = download["file_type"]
 
-        # must append access token to download_url
         download_url = f"{download['download_url']}?access_token={ACCESS_TOKEN}"
         downloads.append((file_type, file_extension, download_url, recording_type, recording_id))
 
@@ -205,16 +203,16 @@ def get_recordings(email, page_size, rec_start_date, rec_end_date):
     }
 
 def delete_recording(meeting_id):
-  """Deletes the Zoom meeting recording by meeting identifier (meeting_id)."""
-  delete_url = f"https://api.zoom.us/v2/meetings/{meeting_id}/recordings"
-  response = requests.delete(url=delete_url, headers=AUTHORIZATION_HEADER)
+    """Deletes the Zoom meeting recording by meeting identifier (meeting_id)."""
+    delete_url = f"https://api.zoom.us/v2/meetings/{meeting_id}/recordings"
+    response = requests.delete(url=delete_url, headers=AUTHORIZATION_HEADER)
 
-  if response.status_code == 204:
-    print(f"{Color.GREEN}==> Recording with ID {meeting_id} was successfully deleted from Zoom.{Color.END}")
-    return True
-  else:
-    print(f"{Color.RED}### Error deleting recording with ID {meeting_id}: {response.text}{Color.END}")
-    return False
+    if response.status_code == 204:
+        print(f"{Color.GREEN}==> Recording with ID {meeting_id} was successfully deleted from Zoom.{Color.END}")
+        return True
+    else:
+        print(f"{Color.RED}### Error deleting recording with ID {meeting_id}: {response.text}{Color.END}")
+        return False
 
 
 def per_delta(start, end, delta):
@@ -227,11 +225,8 @@ def per_delta(start, end, delta):
 
 
 def list_recordings(email):
-    """ Start date now split into YEAR, MONTH, and DAY variables (Within 6 month range)
-        then get recordings within that range
-    """
+    """ Делим период на интервалы по 30 дней и берем все записи """
     recordings = []
-
     for start, end in per_delta(
         RECORDING_START_DATE,
         RECORDING_END_DATE,
@@ -239,63 +234,61 @@ def list_recordings(email):
     ):
         post_data = get_recordings(email, 300, start, end)
         response = requests.get(
-          url=f"https://api.zoom.us/v2/users/{email}/recordings",
-          headers=AUTHORIZATION_HEADER,
-          params={**post_data, "include_fields": "download_access_token"}
+            url=f"https://api.zoom.us/v2/users/{email}/recordings",
+            headers=AUTHORIZATION_HEADER,
+            params={**post_data, "include_fields": "download_access_token"}
         )
-        #print(f"==> Full API response: {json.dumps(response.json(), indent=4)}")
-
         recordings_data = response.json()
         recordings.extend(recordings_data["meetings"])
 
     return recordings
 
 
-def download_recording(download_url, email, filename, folder_name):
-  dl_dir = os.sep.join([DOWNLOAD_DIRECTORY, folder_name])
-  sanitized_download_dir = path_validate.sanitize_filepath(dl_dir)
-  sanitized_filename = path_validate.sanitize_filename(filename)
-  full_filename = os.sep.join([sanitized_download_dir, sanitized_filename])
+def download_recording(download_url, email, year, filename, folder_name):
+    """
+    Downloads recording to
+    DOWNLOAD_DIRECTORY / email / year / folder_name
+    """
+    dl_dir = os.sep.join([DOWNLOAD_DIRECTORY, email, year, folder_name])
+    sanitized_download_dir = path_validate.sanitize_filepath(dl_dir)
+    sanitized_filename = path_validate.sanitize_filename(filename)
+    full_filename = os.sep.join([sanitized_download_dir, sanitized_filename])
 
-  os.makedirs(sanitized_download_dir, exist_ok=True)
+    os.makedirs(sanitized_download_dir, exist_ok=True)
 
-  response = requests.get(download_url, stream=True)
+    response = requests.get(download_url, stream=True)
+    total_size = int(response.headers.get("content-length", 0))
+    block_size = 32 * 1024
 
-  # Total size in bytes from Zoom API
-  total_size = int(response.headers.get("content-length", 0))
-  block_size = 32 * 1024  # 32 KiB block size for download
+    print(f"==> Downloading to folder: {folder_name}")
+    print(f"==> Filename: {filename}")
 
-  print(f"==> Downloading to folder: {folder_name}")
-  print(f"==> Filename: {filename}")
+    prog_bar = progress_bar.tqdm(total=total_size, unit="iB", unit_scale=True)
 
-  # Create progress bar
-  prog_bar = progress_bar.tqdm(total=total_size, unit="iB", unit_scale=True)
+    try:
+        with open(full_filename, "wb") as fd:
+            for chunk in response.iter_content(block_size):
+                prog_bar.update(len(chunk))
+                fd.write(chunk)
+        prog_bar.close()
 
-  try:
-    with open(full_filename, "wb") as fd:
-      for chunk in response.iter_content(block_size):
-        prog_bar.update(len(chunk))
-        fd.write(chunk)  # Write video chunk to disk
-    prog_bar.close()
+        disk_size = os.path.getsize(full_filename)
+        if disk_size == total_size:
+            print(f"{Color.GREEN}File size matches Zoom cloud: {disk_size} bytes{Color.END}")
+            return True
+        else:
+            print(
+                f"{Color.RED}File size mismatch! Zoom: {total_size} bytes, "
+                f"Disk: {disk_size} bytes{Color.END}"
+            )
+            return False
 
-    # Validate file size on disk
-    disk_size = os.path.getsize(full_filename)
-    if disk_size == total_size:
-      print(f"{Color.GREEN}File size matches Zoom cloud: {disk_size} bytes{Color.END}")
-      return True
-    else:
-      print(
-        f"{Color.RED}File size mismatch! Zoom: {total_size} bytes, "
-        f"Disk: {disk_size} bytes{Color.END}"
-      )
-      return False
-
-  except Exception as e:
-    prog_bar.close()
-    print(
-      f"{Color.RED}### Error downloading file {recording_id}.{Color.END}"
-    )
-    return False
+    except Exception as e:
+        prog_bar.close()
+        print(
+            f"{Color.RED}### Error downloading file {recording_id}.{Color.END}"
+        )
+        return False
 
 
 def load_completed_meeting_ids():
@@ -308,6 +301,8 @@ def load_completed_meeting_ids():
             f"{Color.DARK_CYAN}Log file not found. Creating new log file: {Color.END}"
             f"{COMPLETED_MEETING_IDS_LOG}\n"
         )
+        with open(COMPLETED_MEETING_IDS_LOG, 'w') as fd:
+            pass
 
 
 def handle_graceful_shutdown(signal_received, frame):
@@ -320,28 +315,25 @@ def handle_graceful_shutdown(signal_received, frame):
 # ################################################################
 
 def main():
-    # clear the screen buffer
-    #os.system('cls' if os.name == 'nt' else 'clear')
-
     # show the logo
     print(f"""
         {Color.DARK_CYAN}
 
 
-         ,*****************.                  :+********+:          
-      *************************              =+++******+==-         
-    *****************************           =+++++****+=====.       
-  *********************************        .=+++++++**+=======.      
- ******               ******* ******      :++++++++++==========:     
-*******                .**    ******     :+++++++++=  -=========:    
-*******                       ******/   -+++++++++=    -=========-   
-*******                       /******  -+++++++++-      :=========-  
-///////                 //    //////  =+++++++++-        :========== 
+         ,*****************.                   :+********+:
+      *************************               =+++******+==-
+    *****************************            =+++++****+=====.
+  *********************************        .=+++++++**+=======.
+ ******               ******* ******      :++++++++++==========:
+*******                .**    ******     :+++++++++=  -=========:
+*******                       ******/   -+++++++++=    -=========-
+*******                       /******  -+++++++++-      :=========-
+///////                 //    //////  =+++++++++-        :==========
 ///////*              ./////.//////  =+++++++++-          :=++++++++=
  ////////////////////////////////*   -++++++++=------------=********=
-   /////////////////////////////      :++++++=--------------=******= 
-      /////////////////////////        .+++==----------------=****-  
-         ,/////////////////              .==--------------------+*:    
+   /////////////////////////////      :++++++=--------------=******=
+      /////////////////////////        .+++==----------------=****-
+         ,/////////////////             .==--------------------+*:
 
 
 
@@ -353,17 +345,12 @@ def main():
     """)
 
     load_access_token()
-
     load_completed_meeting_ids()
 
     print(f"{Color.BOLD}Getting user accounts...{Color.END}")
     users = get_users()
 
     for email, user_id, first_name, last_name in users:
-        # Check if the email matches the desired user's email
-        if email != 'val@bbooster.io':
-            continue
-
         userInfo = (
             f"{first_name} {last_name} - {email}" if first_name and last_name else f"{email}"
         )
@@ -374,101 +361,105 @@ def main():
         print(f"==> Found {total_count} recordings")
 
         for index, recording in enumerate(recordings):
-          success = False
-          all_files_downloaded = True  # Flag to check all files
-          meeting_id = recording["uuid"]
-          if meeting_id in COMPLETED_MEETING_IDS:
-            print(f"==> Skipping already downloaded recording: {meeting_id}")
-            continue
-
-          try:
-            downloads = get_downloads(recording)
-          except Exception:
-            print(
-              f"{Color.RED}### No files found for recording with ID {recording['id']}.{Color.END}\n"
-            )
-            continue
-
-          for file_type, file_extension, download_url, recording_type, recording_id in downloads:
-            if recording_type != 'incomplete':
-              filename, folder_name = format_filename({
-                "file_type": file_type,
-                "recording": recording,
-                "file_extension": file_extension,
-                "recording_type": recording_type,
-                "recording_id": recording_id
-              })
-
-              print(
-                f"==> Downloading ({index + 1} of {len(recordings)}) as {recording_type}: "
-                f"{recording_id}"
-              )
-
-              if not download_recording(download_url, email, filename, folder_name):
-                print(
-                  f"{Color.RED}### Error downloading file {recording_id}.{Color.END}"
-                )
-                all_files_downloaded = False
-            else:
-              all_files_downloaded = False
-              success = False
-
-          if all_files_downloaded:
-            print(f"{Color.GREEN}==> All files for recording with ID {meeting_id} were downloaded successfully.{Color.END}")
-            if delete_recording(meeting_id):
-              with open(COMPLETED_MEETING_IDS_LOG, 'a') as log:
-                COMPLETED_MEETING_IDS.add(meeting_id)
-                log.write(meeting_id + '\n')
-                log.flush()
-          else:
-            print(
-              f"{Color.YELLOW}==> Could not download all files for recording with ID {meeting_id}. Skipping deletion.{Color.END}"
-            )
             success = False
+            all_files_downloaded = True
+            meeting_id = recording["uuid"]
 
+            if meeting_id in COMPLETED_MEETING_IDS:
+                print(f"==> Skipping already downloaded recording: {meeting_id}")
+                continue
 
             try:
                 downloads = get_downloads(recording)
             except Exception:
                 print(
-                    f"{Color.RED}### Recording files missing for call with id {Color.END}"
-                    f"'{recording['id']}'\n"
+                    f"{Color.RED}### No files found for recording with ID {recording['id']}.{Color.END}\n"
                 )
                 continue
 
             for file_type, file_extension, download_url, recording_type, recording_id in downloads:
                 if recording_type != 'incomplete':
-                    filename, folder_name = (
-                        format_filename({
+                    # Expand format_filename to: filename, folder_name, year
+                    filename, folder_name, year = format_filename({
+                        "file_type": file_type,
+                        "recording": recording,
+                        "file_extension": file_extension,
+                        "recording_type": recording_type,
+                        "recording_id": recording_id
+                    })
+
+                    print(
+                        f"==> Downloading ({index + 1} of {len(recordings)}) as {recording_type}: "
+                        f"{recording_id}"
+                    )
+
+                    # Send year to download_recording
+                    if not download_recording(download_url, email, year, filename, folder_name):
+                        print(
+                            f"{Color.RED}### Error downloading file {recording_id}.{Color.END}"
+                        )
+                        all_files_downloaded = False
+                else:
+                    all_files_downloaded = False
+                    success = False
+
+            if all_files_downloaded:
+                print(f"{Color.GREEN}==> All files for recording with ID {meeting_id} were downloaded successfully.{Color.END}")
+
+                removal_succeeded = True
+                if DELETE_ZOOM_RECORDINGS_AFTER_DOWNLOAD:
+                    removal_succeeded = delete_recording(meeting_id)
+
+                if removal_succeeded:
+                    with open(COMPLETED_MEETING_IDS_LOG, 'a') as log:
+                        COMPLETED_MEETING_IDS.add(meeting_id)
+                        log.write(meeting_id + '\n')
+                        log.flush()
+
+            else:
+                print(
+                    f"{Color.YELLOW}==> Could not download all files for recording with ID {meeting_id}. Skipping deletion.{Color.END}"
+                )
+                success = False
+
+                try:
+                    downloads = get_downloads(recording)
+                except Exception:
+                    print(
+                        f"{Color.RED}### Recording files missing for call with id {Color.END}"
+                        f"'{recording['id']}'\n"
+                    )
+                    continue
+
+                for file_type, file_extension, download_url, recording_type, recording_id in downloads:
+                    if recording_type != 'incomplete':
+                        filename, folder_name, year = format_filename({
                             "file_type": file_type,
                             "recording": recording,
                             "file_extension": file_extension,
                             "recording_type": recording_type,
                             "recording_id": recording_id
                         })
-                    )
 
-                    # truncate URL to 64 characters
-                    truncated_url = download_url[0:64] + "..."
-                    print(
-                        f"==> Downloading ({index + 1} of {total_count}) as {recording_type}: "
-                        f"{recording_id}: {truncated_url}"
-                    )
-                    success |= download_recording(download_url, email, filename, folder_name)
-                else:
-                    print(
-                        f"{Color.RED}### Incomplete Recording ({index + 1} of {total_count}) for "
-                        f"recording with id {Color.END}'{recording_id}'"
-                    )
-                    success = False
+                        truncated_url = download_url[0:64] + "..."
+                        print(
+                            f"==> Downloading ({index + 1} of {total_count}) as {recording_type}: "
+                            f"{recording_id}: {truncated_url}"
+                        )
+                        success |= download_recording(download_url, email, year, filename, folder_name)
+                    else:
+                        print(
+                            f"{Color.RED}### Incomplete Recording ({index + 1} of {total_count}) for "
+                            f"recording with id {Color.END}'{recording_id}'"
+                        )
+                        success = False
 
-            if success:
-                # if successful, write the ID of this recording to the completed file
-                with open(COMPLETED_MEETING_IDS_LOG, 'a') as log:
-                    COMPLETED_MEETING_IDS.add(meeting_id)
-                    log.write(meeting_id)
-                    log.write('\n')
-                    log.flush()
+                if success:
+                    with open(COMPLETED_MEETING_IDS_LOG, 'a') as log:
+                        COMPLETED_MEETING_IDS.add(meeting_id)
+                        log.write(meeting_id)
+                        log.write('\n')
+                        log.flush()
 
     print(f"\n{Color.BOLD}{Color.GREEN}*** All done! ***{Color.END}")
     save_location = os.path.abspath(DOWNLOAD_DIRECTORY)
@@ -479,7 +470,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # tell Python to shutdown gracefully when SIGINT is received
     signal.signal(signal.SIGINT, handle_graceful_shutdown)
-
     main()
